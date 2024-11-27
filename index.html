@@ -1,0 +1,452 @@
+<html>
+    <head>
+        <title>Scrumptious Produce - A Scrum Game</title>
+    </head>
+    <body>
+        <h1 style="text-align: center; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif">Scrumptious Produce</h1>
+        <section style="height: 800px; width: 800px; margin-left: auto; margin-right: auto; padding: 10px 10px 10px 10px;">
+            <canvas id="game" height="800px" width="800px" style="border: 1px solid black">
+                If you're seeing this, your browser doesn't support the canvas element. Please apply updates or switch browsers to use Scrumptious Produce.
+            </canvas>
+        </section>
+        <script type="text/javascript">
+            const DEBUG = false;
+            const DEBUG_LOGGING = true;
+            const TRACE_LOGGING = false;
+
+            // These have to be classic functions to access the arguments object
+            function debugLog() {
+                if (!DEBUG_LOGGING) {
+                    return;
+                }
+
+                console.log.apply(console, arguments);
+            };
+
+            function traceLog() {
+                if (!TRACE_LOGGING) {
+                    return;
+                }
+
+                console.log.apply(console, arguments);
+            }
+
+            const CANVAS_HEIGHT = 800;
+            const CANVAS_WIDTH = 800;
+
+            const GLOBAL_STATE = {
+                ELEMENT_HOVERED: false,
+                HELP_DISPLAYED: false,
+            };
+
+            const HEADER_COLOR = "rgb(11,133,0)";
+            const HEADER_HEIGHT = 85;
+
+            const FOOTER_HEIGHT = 50;
+
+            const BUTTON_TEXTS = ["New Game", "Save Game", "Help", "The Scrum Guide"];
+            const BUTTON_CLICKS = {
+                "NEW_GAME": () => { console.log("New game clicked!"); },
+                "SAVE_GAME": () => { console.log("Save game clicked!"); },
+                "HELP": () => { GLOBAL_STATE.HELP_DISPLAYED = true; console.log("Help clicked!"); GLOBAL_STATE.HELP_DISPLAYED = false },
+                "THE_SCRUM_GUIDE": () => window.open("https://scrumguides.org/scrum-guide.html", "_blank")
+            };
+
+            const BUTTON_HOVERS = {};
+            const BUTTONS_BORDER_COLOR = "rgb(255,0,0)";
+            const BUTTONS_COLOR = "rgb(0,0,0)";
+            const BUTTONS_FONT = "28px sans-serif";
+            const BUTTONS_LEFT_MARGIN = 25;
+            const BUTTONS_TOP_MARGIN = 55;
+            const BUTTON_HORIZONTAL_MARGIN = 60;
+            const BUTTON_PROPERTIES = {};   
+
+            const getButtonName = text => text.split(" ").map(word => word.toUpperCase()).join("_");
+            const getButtonHeight = measurements => measurements.actualBoundingBoxDescent + measurements.actualBoundingBoxAscent;
+            const getButtonWidth = measurements => Math.round(measurements.actualBoundingBoxRight + measurements.actualBoundingBoxLeft);
+            const getButtonDimensions = (context, text) => {
+                const measurements = context.measureText(text);
+                return [getButtonHeight(measurements), getButtonWidth(measurements), measurements];
+            };
+
+            const BACKGROUND_HEIGHT = CANVAS_HEIGHT - (HEADER_HEIGHT + FOOTER_HEIGHT);
+            const BACKGROUND_WIDTH = CANVAS_WIDTH;
+
+            // TODO: Replace with image or at least some cooler canvas drawing
+            const CHARACTER_ACCELERATION = 1;
+            const CHARACTER_FRICTION = 0.1;
+            const CHARACTER_MAX_VELOCITY = 10;
+            const CHARACTER_MIN_VELOCITY = -10;
+            const CHARACTER_HEIGHT = 50;
+            const CHARACTER_WIDTH = 50;
+            const CHARACTER_POSITION = {
+                x: BACKGROUND_WIDTH / 2 - CHARACTER_WIDTH / 2,
+                y: (HEADER_HEIGHT + (BACKGROUND_HEIGHT / 2)) - CHARACTER_HEIGHT / 2
+            };
+            const CHARACTER_VELOCITY = {
+                x: 0,
+                y: 0
+            };
+
+            const canvas = document.querySelector("#game");
+            const context = canvas.getContext("2d");
+
+            const doAndRestore = (drawFunction) => {
+                context.save();
+                drawFunction(context);
+                context.restore();
+            };
+
+            const generateButtonPosition = (context, text, x, y) => {
+                let height, width, measurements;                                    
+                
+
+                doAndRestore(context => {
+                    context.font = BUTTONS_FONT;
+                    [height, width, measurements] = getButtonDimensions(context, text);
+                    debugLog(`Height of ${text}: ${height}`);
+                    debugLog(`Width of ${text}: ${width}`);
+                    debugLog("Measurements of " + text + ":", measurements);
+                });
+
+                return {
+                    x,
+                    y: y - measurements.actualBoundingBoxAscent,
+                    x2: x + width,
+                    y2: y + measurements.actualBoundingBoxDescent,
+                    height,
+                    width
+                };
+            };
+
+            const createButton = (context, text, x, y) => {
+                debugLog("Creating a button with text: " + text + ", x: " + x + ", y: " + y);
+                const name = getButtonName(text);
+                const position = generateButtonPosition(context, text, x, y);
+                const textWidth = position.width;
+
+                const properties = {
+                    hovered: false,
+                    position,
+                    text
+                };
+
+                if (BUTTON_CLICKS[name]) {
+                    properties.onClick = BUTTON_CLICKS[name];
+                }
+
+                if (BUTTON_HOVERS[name]) {
+                    properties.onHover = BUTTON_HOVERS[name];
+                }
+
+                BUTTON_PROPERTIES[name] = properties;
+
+                return textWidth;
+            };                     
+
+            let nextX = BUTTONS_LEFT_MARGIN;
+            for (const text of BUTTON_TEXTS) {
+                const buttonWidth = createButton(context, text, nextX, BUTTONS_TOP_MARGIN);
+                nextX += (buttonWidth + BUTTON_HORIZONTAL_MARGIN);
+            }
+
+            const drawButton = (context, buttonProperties) => {
+                const { text, position, hovered, onHover = undefined } = buttonProperties;
+                const { x, x2, y, y2, height, width } = position;
+
+                doAndRestore(context => {                    
+                    context.font = BUTTONS_FONT;
+                    context.fillStyle = BUTTONS_COLOR;
+                    // Seems like a hack for a bug I can't suss out regarding text position
+                    context.textBaseline = "hanging";
+                    context.fillText(text, x, y);
+                });
+
+                if (DEBUG) {
+                    doAndRestore(context => {
+                        context.strokeStyle = BUTTONS_BORDER_COLOR;
+                        context.strokeRect(x, y, width, height);
+                    });
+                }
+
+                if (hovered) {                    
+                    doAndRestore(context => {
+                        context.lineWidth = 1;
+                        context.strokeStyle = "rgb(0,0,0)";
+                        context.beginPath();
+                        context.moveTo(x, y2);
+                        context.lineTo(x2, y2);
+                        context.stroke();
+                    });
+
+                    if (onHover) {
+                        onHover();
+                    }
+                }
+            };
+
+            const getCanvasPosition = (canvas, event) => {
+                const { left, top } = canvas.getBoundingClientRect();
+                const { clientX, clientY } = event;
+
+                return [ clientX - left, clientY - top ];
+            };
+
+            const within = (value, minimum, maximum) => value >= minimum && value <= maximum;
+            const withinButtonCoordinates = (x, y, button) => {
+                return within(x, button.position.x, button.position.x2) && within(y, button.position.y, button.position.y2);
+            };
+
+            canvas.addEventListener("click", event => {
+                const [x, y] = getCanvasPosition(canvas, event);
+                traceLog("Mouse clicked at x: " + x + ", y: " + y + " in canvas");
+                const clickedButton = Object.values(BUTTON_PROPERTIES)
+                                            .find(button => withinButtonCoordinates(x, y, button));
+
+                if (clickedButton) {
+                    debugLog("Coordinates click hit:", clickedButton);
+                    clickedButton.onClick();
+                } else {
+                    debugLog("Coordinates click miss");
+                }
+            });
+
+            let hoveredButton = undefined;
+            let lastHoveredButton = undefined;
+
+            document.addEventListener("keydown", event => {
+                switch (event.which) {
+                    // LEFT
+                    case 37:
+                        if (CHARACTER_VELOCITY.x > 0) {
+                            CHARACTER_VELOCITY.x = -CHARACTER_ACCELERATION;
+                        } else {
+                            CHARACTER_VELOCITY.x = Math.max(CHARACTER_VELOCITY.x - CHARACTER_ACCELERATION, CHARACTER_MIN_VELOCITY);
+                        }
+                        break;
+
+                    // UP
+                    case 38:
+                        if (CHARACTER_VELOCITY.y > 0) {
+                            CHARACTER_VELOCITY.y = -CHARACTER_ACCELERATION;
+                        } else {                            
+                            CHARACTER_VELOCITY.y = Math.max(CHARACTER_VELOCITY.y - CHARACTER_ACCELERATION, CHARACTER_MIN_VELOCITY);
+                        }
+                        break;
+
+                    // RIGHT
+                    case 39:
+                        if (CHARACTER_VELOCITY.x < 0) {
+                            CHARACTER_VELOCITY.x = CHARACTER_ACCELERATION;
+                        } else {                            
+                            CHARACTER_VELOCITY.x = Math.min(CHARACTER_VELOCITY.x + CHARACTER_ACCELERATION, CHARACTER_MAX_VELOCITY);
+                        }
+                        break;
+
+                    // DOWN
+                    case 40:
+                        if (CHARACTER_VELOCITY.y < 0) {
+                            CHARACTER_VELOCITY.y = CHARACTER_ACCELERATION;
+                        } else {
+                            CHARACTER_VELOCITY.y = Math.min(CHARACTER_VELOCITY.y + CHARACTER_ACCELERATION, CHARACTER_MAX_VELOCITY);
+                        }
+                        
+                        break;
+
+                    default:
+                        return;
+                }
+
+                event.preventDefault();
+            });
+
+            document.querySelector("body").addEventListener("mousemove", event => {
+                if (event.target.id === "canvas") {
+                    return;
+                }
+
+                if (event.target.localName === "body") {
+                    GLOBAL_STATE.ELEMENT_HOVERED = false;
+                    if (lastHoveredButton) {
+                        lastHoveredButton.hovered = false;
+                    }
+                }
+            });
+
+            canvas.addEventListener("mousemove", event => {
+                const [x, y] = getCanvasPosition(canvas, event);
+                traceLog("Mouse at x: " + x + ", y: " + y + " in canvas");
+
+                lastHoveredButton = hoveredButton;
+                hoveredButton = Object.values(BUTTON_PROPERTIES)
+                                      .find(button => withinButtonCoordinates(x, y, button));
+
+                
+                if (hoveredButton) {                    
+                    traceLog("Coordinates hover hit:", hoveredButton);
+                    GLOBAL_STATE.ELEMENT_HOVERED = true;
+                    hoveredButton.hovered = true;
+                    if (hoveredButton.onHover) {
+                        hoveredButton.onHover();
+                    }
+                } else {
+                    traceLog("Coordinates hover miss");
+                    GLOBAL_STATE.ELEMENT_HOVERED = false;
+                    if (lastHoveredButton) {
+                        lastHoveredButton.hovered = false;
+                    }
+                }
+            });            
+            
+            const clearHoverCursor = () => document.body.style.cursor = "default";
+            const setHoverCursor = () => document.body.style.cursor = "pointer";
+
+            const DESIRED_FPS = 60;
+            const FRAME_DURATION = 1000 / DESIRED_FPS;
+
+            let start = document.timeline.currentTime;
+            let elapsed = 0;
+            let accumulated = 0;
+
+            const getNext = (current, change, bound, boundType = "ceiling") => {
+                const summed = current + change;
+
+                const wouldViolateBounds = boundType === "ceiling" ? summed > bound : summed < bound;
+                const next = wouldViolateBounds ? bound : summed;
+
+                return [ wouldViolateBounds, next ];
+            };
+
+            const getNextCeiling = (current, change, bound) => getNext(current, change, bound, "ceiling");
+            const getNextFloor = (current, change, bound) => getNext(current, change, bound, "floor");
+
+            // Update states for single frame passage
+            const step = () => {
+                const newPositions = JSON.parse(JSON.stringify(CHARACTER_POSITION));
+                const newVelocities = JSON.parse(JSON.stringify(CHARACTER_VELOCITY));
+
+                const { x: currentX, y: currentY } = CHARACTER_POSITION;
+                const { x: xVelocity, y: yVelocity } = CHARACTER_VELOCITY;
+
+                if (xVelocity === 0 && yVelocity === 0) {
+                    return;
+                }
+
+                if (xVelocity !== 0) {
+                    if (xVelocity > 0) {
+                        const [ wouldViolateBounds, nextX ] = getNextCeiling(currentX, xVelocity, BACKGROUND_WIDTH - CHARACTER_WIDTH);
+                        newPositions.x = nextX;
+                        // let wouldViolateBounds = (currentX + xVelocity) > BACKGROUND_WIDTH - CHARACTER_WIDTH;
+                        // newPositions.x = Math.min(currentX + xVelocity, BACKGROUND_WIDTH - CHARACTER_WIDTH);
+                        if (wouldViolateBounds || newVelocities.x < CHARACTER_FRICTION) {
+                            newVelocities.x = 0
+                        } else {
+                            newVelocities.x -= CHARACTER_FRICTION;                            
+                        }                        
+                    } else {
+                        const [ wouldViolateBounds, nextX ] = getNextFloor(currentX, xVelocity, 0);
+                        newPositions.x = nextX;
+                        // let wouldViolateBounds = (currentX + xVelocity) < 0;
+                        // newPositions.x = Math.max(currentX + xVelocity, 0);
+                        if (wouldViolateBounds || Math.abs(newVelocities.x) < CHARACTER_FRICTION) {
+                            newVelocities.x = 0
+                        } else {
+                            newVelocities.x += CHARACTER_FRICTION;
+                        }                        
+                    }
+                }
+
+                if (yVelocity !== 0) {
+                    if (yVelocity > 0) {
+                        let wouldViolateBounds = (currentY + yVelocity) > (HEADER_HEIGHT + BACKGROUND_HEIGHT) - CHARACTER_HEIGHT;
+                        newPositions.y = Math.min(currentY + yVelocity, (HEADER_HEIGHT + BACKGROUND_HEIGHT) - CHARACTER_HEIGHT);
+                        if (wouldViolateBounds || newVelocities.y < CHARACTER_FRICTION) {
+                            newVelocities.y = 0;
+                        } else {
+                            newVelocities.y -= CHARACTER_FRICTION;
+                        }                        
+                    } else {
+                        let wouldViolateBounds = (currentY + yVelocity) < HEADER_HEIGHT;
+                        newPositions.y = Math.max(currentY + yVelocity, HEADER_HEIGHT);
+                        if (wouldViolateBounds || Math.abs(newVelocities.y) < CHARACTER_FRICTION) {
+                            newVelocities.y = 0;
+                        } else {
+                            newVelocities.y += CHARACTER_FRICTION;
+                        }
+                    }
+                }
+
+                CHARACTER_POSITION.x = newPositions.x;
+                CHARACTER_POSITION.y = newPositions.y;
+                CHARACTER_VELOCITY.x = newVelocities.x;
+                CHARACTER_VELOCITY.y = newVelocities.y;
+            };
+
+            const loop = now => {
+                traceLog("Game loop execution");
+                elapsed = now - start;
+                start = now;
+
+                accumulated += elapsed;
+
+                while (accumulated >= FRAME_DURATION) {
+                    // step
+                    step();
+                    accumulated -= FRAME_DURATION;
+                }
+
+                // draw();
+            };
+
+            const draw = () => {
+                doAndRestore(context => {
+                    context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                });
+
+                // Header
+                doAndRestore(context => {
+                    context.fillStyle = HEADER_COLOR;
+                    context.fillRect(0, 0, CANVAS_WIDTH, HEADER_HEIGHT);   
+                });
+
+                // Header buttons
+                for (const button of Object.values(BUTTON_PROPERTIES)) {
+                    drawButton(context, button);
+                }
+
+                // Body background
+                doAndRestore(context => {
+                    context.fillStyle = "rgb(100, 100, 100)";
+                    context.fillRect(0, HEADER_HEIGHT, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
+                });
+
+                // Distinguished gentleman
+                doAndRestore(context => {
+                    context.fillStyle = "rgb(140, 20, 120)";
+                    // x, y, width, height
+                    const { x, y } = CHARACTER_POSITION;
+                    debugLog("Drawing character at x: " + x + ", y: " + y);
+                    context.fillRect(x, y, CHARACTER_WIDTH, CHARACTER_HEIGHT);
+                });
+                
+
+                // Footer
+                doAndRestore(context => {
+                    context.fillStyle = "rgb(11,133,0)";
+                    context.fillRect(0, CANVAS_HEIGHT - FOOTER_HEIGHT, CANVAS_WIDTH, FOOTER_HEIGHT);
+                });
+
+                if (GLOBAL_STATE.ELEMENT_HOVERED) {
+                    setHoverCursor();
+                } else {
+                    clearHoverCursor();
+                }
+
+                window.requestAnimationFrame(draw);
+            };
+
+            window.requestAnimationFrame(draw);
+            window.setInterval(() => loop(document.timeline.currentTime), FRAME_DURATION);
+        </script>
+    </body>
+</html>
