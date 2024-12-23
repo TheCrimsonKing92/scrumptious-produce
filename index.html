@@ -42,6 +42,7 @@
             const HEADER_COLOR = "rgb(11,133,0)";
             const HEADER_HEIGHT = 85;
 
+            const FOOTER_COLOR = "rgb(11,133,0)";
             const FOOTER_HEIGHT = 50;
 
             const BUTTON_TEXTS = ["New Game", "Save Game", "Help", "The Scrum Guide"];
@@ -66,26 +67,156 @@
             const getButtonWidth = measurements => Math.round(measurements.actualBoundingBoxRight + measurements.actualBoundingBoxLeft);
             const getButtonDimensions = (context, text) => {
                 const measurements = context.measureText(text);
-                return [getButtonHeight(measurements), getButtonWidth(measurements), measurements];
+                return [ getButtonHeight(measurements), getButtonWidth(measurements), measurements ];
             };
 
+            const BACKGROUND_COLOR = "rgb(100, 100, 100)";
             const BACKGROUND_HEIGHT = CANVAS_HEIGHT - (HEADER_HEIGHT + FOOTER_HEIGHT);
             const BACKGROUND_WIDTH = CANVAS_WIDTH;
 
             // TODO: Replace with image or at least some cooler canvas drawing
+            const CHARACTER_SKIN_COLOR = "rgb(210, 180, 140, 1)";
             const CHARACTER_ACCELERATION = 1;
             const CHARACTER_FRICTION = 0.1;
             const CHARACTER_MAX_VELOCITY = 10;
             const CHARACTER_MIN_VELOCITY = -10;
             const CHARACTER_HEIGHT = 50;
             const CHARACTER_WIDTH = 50;
+            const CHARACTER_FACE_WIDTH_RADIUS = 25;
+            const CHARACTER_FACE_HEIGHT_RADIUS = 30;
+            const CHARACTER_RADIUS = CHARACTER_WIDTH / 2;
             const CHARACTER_POSITION = {
                 x: BACKGROUND_WIDTH / 2 - CHARACTER_WIDTH / 2,
-                y: (HEADER_HEIGHT + (BACKGROUND_HEIGHT / 2)) - CHARACTER_HEIGHT / 2
+                y: (HEADER_HEIGHT + (BACKGROUND_HEIGHT / 2)) - CHARACTER_HEIGHT / 2,
+                x2: this.x + CHARACTER_WIDTH,
+                y2: this.y + CHARACTER_HEIGHT,
+                getMidpoint: function() { 
+                    const x = this.x + ((this.x2 - this.x) / 2);
+                    const y = this.y + ((this.y2 - this.y) / 2);
+
+                    return { x, y };
+                },
+                update: function({ x, y }) {
+                    if (this.x !== x) {
+                        this.x = x;
+                        this.x2 = this.x + CHARACTER_WIDTH;
+                    }
+                    
+                    if (this.y !== y) {
+                        this.y = y;
+                        this.y2 = this.y + CHARACTER_HEIGHT;
+                    }
+                }
             };
+            const CHARACTER_POSITION_BOUNDARY = {
+                x: {
+                    floor: 0,
+                    ceiling: BACKGROUND_WIDTH - CHARACTER_WIDTH,
+                    boundsViolation: function(value) { value <= this.floor ? "floor" : value >= this.ceiling ? "ceiling" : undefined },
+                    inBounds: function(value) { return value > this.floor && value < this.ceiling }
+                },
+                y: {
+                    floor: HEADER_HEIGHT,
+                    ceiling: (HEADER_HEIGHT + BACKGROUND_HEIGHT) - CHARACTER_HEIGHT,
+                    boundsViolation: function(value) { value <= this.floor ? "floor" : value >= this.ceiling ? "ceiling" : undefined },
+                    inBounds: function(value) { return value > this.floor && value < this.ceiling }
+                }
+            };
+
+            const CHARACTER_EYE_WIDTH = 9;
+            const CHARACTER_EYE_MARGIN = CHARACTER_EYE_WIDTH / 2;
+            // const CHARACTER_EYE_MARGIN = 9;
+            const CHARACTER_EYE_BACKGROUND_COLOR = "rgb(255, 255, 255)";
+            const CHARACTER_IRIS_COLOR = "gray";
+            const CHARACTER_PUPIL_COLOR = "rgb(0, 0, 0)";
+            const CHARACTER_PUPIL_WIDTH = 3;
+            const CHARACTER_PUPIL_OFFSET = Math.floor(CHARACTER_EYE_WIDTH / 2 - CHARACTER_PUPIL_WIDTH / 2);
+
             const CHARACTER_VELOCITY = {
                 x: 0,
-                y: 0
+                y: 0,
+                update: function({ x, y }) {
+                    if (this.x !== x) {
+                        this.x = x;
+                    }
+
+                    if (this.y !== y) {
+                        this.y = y;
+                    }
+                }
+            };
+
+            const velocityLessThanFriction = (velocity, friction) => {
+                return (velocity > 0 && velocity < friction) ||
+                       (velocity < 0 && Math.abs(velocity) < friction);
+            };
+
+            const getNext = (current, change, bound, boundType = "ceiling") => {
+                const summed = current + change;
+
+                const wouldViolateBounds = boundType === "ceiling" ? summed > bound : summed < bound;
+                const next = wouldViolateBounds ? bound : summed;
+
+                return [ wouldViolateBounds, next ];
+            };
+
+            const getNextCeiling = (current, change, bound) => getNext(current, change, bound, "ceiling");
+            const getNextFloor = (current, change, bound) => getNext(current, change, bound, "floor");
+
+            const getNextXPosition = (currentPosition, velocity) => {
+                if (velocity === 0) {
+                    return [ false, currentPosition ];
+                }
+
+                if (velocity > 0) {
+                    return getNextCeiling(currentPosition, velocity, CHARACTER_POSITION_BOUNDARY.x.ceiling);
+                } else {
+                    return getNextFloor(currentPosition, velocity, CHARACTER_POSITION_BOUNDARY.x.floor);
+                }
+            };
+            const getNextYPosition = (currentPosition, velocity) => {
+                if (velocity === 0) {
+                    return [ false, currentPosition ];
+                }
+
+                if (velocity > 0) {
+                    return getNextCeiling(currentPosition, velocity, CHARACTER_POSITION_BOUNDARY.y.ceiling);
+                } else {
+                    return getNextFloor(currentPosition, velocity, CHARACTER_POSITION_BOUNDARY.y.floor);
+                }
+            };
+
+            const getNextVelocity = (currentVelocity, friction, wouldViolateBounds) => {
+                if (currentVelocity === 0 || wouldViolateBounds || velocityLessThanFriction(currentVelocity, friction)) {
+                    return 0;
+                }
+
+                if (currentVelocity > 0) {
+                    return currentVelocity - friction;
+                } else {
+                    return currentVelocity + friction;
+                }
+            };
+
+            const getNextVelocities = (velocities, violations, friction) => {
+                return [
+                    getNextVelocity(velocities.x, friction, violations.x),
+                    getNextVelocity(velocities.y, friction, violations.y)
+                ];
+            };
+
+            const updateCharacter = (positions, velocities) => {
+                if (velocities.x === 0 && velocities.y === 0) {
+                    return;
+                }
+
+                const [ xWouldViolate, x ] = getNextXPosition(positions.x, velocities.x);
+                const [ yWouldViolate, y ] = getNextYPosition(positions.y, velocities.y);
+                const violations = { x: xWouldViolate, y: yWouldViolate };
+                const [ xVelocity, yVelocity ] = getNextVelocities(velocities, violations, CHARACTER_FRICTION);
+
+                positions.update({ x, y });
+                velocities.update({ x: xVelocity, y: yVelocity });
             };
 
             const canvas = document.querySelector("#game");
@@ -98,8 +229,7 @@
             };
 
             const generateButtonPosition = (context, text, x, y) => {
-                let height, width, measurements;                                    
-                
+                let height, width, measurements;       
 
                 doAndRestore(context => {
                     context.font = BUTTONS_FONT;
@@ -194,7 +324,8 @@
 
             const within = (value, minimum, maximum) => value >= minimum && value <= maximum;
             const withinButtonCoordinates = (x, y, button) => {
-                return within(x, button.position.x, button.position.x2) && within(y, button.position.y, button.position.y2);
+                return within(x, button.position.x, button.position.x2) &&
+                       within(y, button.position.y, button.position.y2);
             };
 
             canvas.addEventListener("click", event => {
@@ -215,48 +346,51 @@
             let lastHoveredButton = undefined;
 
             document.addEventListener("keydown", event => {
+                let { x, y } = CHARACTER_VELOCITY;
+
                 switch (event.which) {
                     // LEFT
                     case 37:
-                        if (CHARACTER_VELOCITY.x > 0) {
-                            CHARACTER_VELOCITY.x = -CHARACTER_ACCELERATION;
+                        if (x > 0) {
+                            x = -CHARACTER_ACCELERATION;
                         } else {
-                            CHARACTER_VELOCITY.x = Math.max(CHARACTER_VELOCITY.x - CHARACTER_ACCELERATION, CHARACTER_MIN_VELOCITY);
+                            x = Math.max(x - CHARACTER_ACCELERATION, CHARACTER_MIN_VELOCITY);
                         }
                         break;
 
                     // UP
                     case 38:
-                        if (CHARACTER_VELOCITY.y > 0) {
-                            CHARACTER_VELOCITY.y = -CHARACTER_ACCELERATION;
+                        if (y > 0) {
+                            y = -CHARACTER_ACCELERATION;
                         } else {                            
-                            CHARACTER_VELOCITY.y = Math.max(CHARACTER_VELOCITY.y - CHARACTER_ACCELERATION, CHARACTER_MIN_VELOCITY);
+                            y = Math.max(y - CHARACTER_ACCELERATION, CHARACTER_MIN_VELOCITY);
                         }
                         break;
 
                     // RIGHT
                     case 39:
-                        if (CHARACTER_VELOCITY.x < 0) {
-                            CHARACTER_VELOCITY.x = CHARACTER_ACCELERATION;
+                        if (x < 0) {
+                            x = CHARACTER_ACCELERATION;
                         } else {                            
-                            CHARACTER_VELOCITY.x = Math.min(CHARACTER_VELOCITY.x + CHARACTER_ACCELERATION, CHARACTER_MAX_VELOCITY);
+                            x = Math.min(x + CHARACTER_ACCELERATION, CHARACTER_MAX_VELOCITY);
                         }
                         break;
 
                     // DOWN
                     case 40:
-                        if (CHARACTER_VELOCITY.y < 0) {
-                            CHARACTER_VELOCITY.y = CHARACTER_ACCELERATION;
+                        if (y < 0) {
+                            y = CHARACTER_ACCELERATION;
                         } else {
-                            CHARACTER_VELOCITY.y = Math.min(CHARACTER_VELOCITY.y + CHARACTER_ACCELERATION, CHARACTER_MAX_VELOCITY);
+                            y = Math.min(y + CHARACTER_ACCELERATION, CHARACTER_MAX_VELOCITY);
                         }
                         
                         break;
 
                     default:
                         return;
-                }
+                }                
 
+                CHARACTER_VELOCITY.update({ x, y });
                 event.preventDefault();
             });
 
@@ -301,86 +435,17 @@
             const clearHoverCursor = () => document.body.style.cursor = "default";
             const setHoverCursor = () => document.body.style.cursor = "pointer";
 
+            // Update states for single frame passage
+            const step = () => {
+                updateCharacter(CHARACTER_POSITION, CHARACTER_VELOCITY);
+            };
+
             const DESIRED_FPS = 60;
             const FRAME_DURATION = 1000 / DESIRED_FPS;
 
             let start = document.timeline.currentTime;
             let elapsed = 0;
             let accumulated = 0;
-
-            const getNext = (current, change, bound, boundType = "ceiling") => {
-                const summed = current + change;
-
-                const wouldViolateBounds = boundType === "ceiling" ? summed > bound : summed < bound;
-                const next = wouldViolateBounds ? bound : summed;
-
-                return [ wouldViolateBounds, next ];
-            };
-
-            const getNextCeiling = (current, change, bound) => getNext(current, change, bound, "ceiling");
-            const getNextFloor = (current, change, bound) => getNext(current, change, bound, "floor");
-
-            // Update states for single frame passage
-            const step = () => {
-                const newPositions = JSON.parse(JSON.stringify(CHARACTER_POSITION));
-                const newVelocities = JSON.parse(JSON.stringify(CHARACTER_VELOCITY));
-
-                const { x: currentX, y: currentY } = CHARACTER_POSITION;
-                const { x: xVelocity, y: yVelocity } = CHARACTER_VELOCITY;
-
-                if (xVelocity === 0 && yVelocity === 0) {
-                    return;
-                }
-
-                if (xVelocity !== 0) {
-                    if (xVelocity > 0) {
-                        const [ wouldViolateBounds, nextX ] = getNextCeiling(currentX, xVelocity, BACKGROUND_WIDTH - CHARACTER_WIDTH);
-                        newPositions.x = nextX;
-                        // let wouldViolateBounds = (currentX + xVelocity) > BACKGROUND_WIDTH - CHARACTER_WIDTH;
-                        // newPositions.x = Math.min(currentX + xVelocity, BACKGROUND_WIDTH - CHARACTER_WIDTH);
-                        if (wouldViolateBounds || newVelocities.x < CHARACTER_FRICTION) {
-                            newVelocities.x = 0
-                        } else {
-                            newVelocities.x -= CHARACTER_FRICTION;                            
-                        }                        
-                    } else {
-                        const [ wouldViolateBounds, nextX ] = getNextFloor(currentX, xVelocity, 0);
-                        newPositions.x = nextX;
-                        // let wouldViolateBounds = (currentX + xVelocity) < 0;
-                        // newPositions.x = Math.max(currentX + xVelocity, 0);
-                        if (wouldViolateBounds || Math.abs(newVelocities.x) < CHARACTER_FRICTION) {
-                            newVelocities.x = 0
-                        } else {
-                            newVelocities.x += CHARACTER_FRICTION;
-                        }                        
-                    }
-                }
-
-                if (yVelocity !== 0) {
-                    if (yVelocity > 0) {
-                        let wouldViolateBounds = (currentY + yVelocity) > (HEADER_HEIGHT + BACKGROUND_HEIGHT) - CHARACTER_HEIGHT;
-                        newPositions.y = Math.min(currentY + yVelocity, (HEADER_HEIGHT + BACKGROUND_HEIGHT) - CHARACTER_HEIGHT);
-                        if (wouldViolateBounds || newVelocities.y < CHARACTER_FRICTION) {
-                            newVelocities.y = 0;
-                        } else {
-                            newVelocities.y -= CHARACTER_FRICTION;
-                        }                        
-                    } else {
-                        let wouldViolateBounds = (currentY + yVelocity) < HEADER_HEIGHT;
-                        newPositions.y = Math.max(currentY + yVelocity, HEADER_HEIGHT);
-                        if (wouldViolateBounds || Math.abs(newVelocities.y) < CHARACTER_FRICTION) {
-                            newVelocities.y = 0;
-                        } else {
-                            newVelocities.y += CHARACTER_FRICTION;
-                        }
-                    }
-                }
-
-                CHARACTER_POSITION.x = newPositions.x;
-                CHARACTER_POSITION.y = newPositions.y;
-                CHARACTER_VELOCITY.x = newVelocities.x;
-                CHARACTER_VELOCITY.y = newVelocities.y;
-            };
 
             const loop = now => {
                 traceLog("Game loop execution");
@@ -390,51 +455,156 @@
                 accumulated += elapsed;
 
                 while (accumulated >= FRAME_DURATION) {
-                    // step
                     step();
                     accumulated -= FRAME_DURATION;
                 }
-
-                // draw();
             };
 
-            const draw = () => {
+            const drawBackground = () => {
                 doAndRestore(context => {
-                    context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                    context.fillStyle = BACKGROUND_COLOR;
+                    context.fillRect(0, HEADER_HEIGHT, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
                 });
+            };
 
+            const drawFace = (context, x, y, width, height) => {                
+                traceLog("Drawing character head at x: " + x + ", y: " + y);
+                context.fillStyle = CHARACTER_SKIN_COLOR;
+                context.beginPath();
+                context.ellipse(x, y, width, height, 0, 0, 2 * Math.PI);
+                context.fill();
+            };
+
+            const drawHair = (context, x, y, width, height) => {
+
+            };
+
+            const drawEyebrow = (context, x, y) => {
+                context.strokeStyle = "black";
+                context.beginPath();
+                context.arc(x, y - CHARACTER_EYE_WIDTH * .1, CHARACTER_EYE_WIDTH * .7, -.25 * Math.PI, -.75 * Math.PI, true);
+                context.stroke();
+            };
+
+            const drawEyelid = (context, x, y) => {
+                context.beginPath();
+                context.arc(x, y, CHARACTER_EYE_WIDTH * .6, -.25 * Math.PI, -.75 * Math.PI, true);
+                context.fillStyle = CHARACTER_SKIN_COLOR;
+                context.fill();
+                context.strokeStyle = "pink";
+                context.stroke();
+            };
+
+            const drawIris = (context, x, y) => {
+                context.beginPath();
+                context.arc(x, y, CHARACTER_EYE_WIDTH * .4, 0, 2 * Math.PI, false);
+                context.fillStyle = CHARACTER_IRIS_COLOR;
+                context.fill();
+            };
+
+            const drawPupil = (context, x, y) => {
+                context.beginPath();
+                context.arc(x, y, CHARACTER_EYE_WIDTH / 5, 0, 2 * Math.PI, false);
+                context.fillStyle = CHARACTER_PUPIL_COLOR;
+                context.fill();
+            };
+
+            const drawSclera = (context, x, y) => {
+                context.beginPath();
+                context.arc(x, y, CHARACTER_EYE_WIDTH * .6, 0, 2 * Math.PI, false);
+                context.fillStyle = CHARACTER_EYE_BACKGROUND_COLOR;
+                context.fill();
+                context.strokeStyle = "pink";
+                context.stroke();
+            };
+
+            const drawEye = (context, x, y, xTranslate = -CHARACTER_EYE_WIDTH * .9, yTranslate = -CHARACTER_EYE_WIDTH * .9) => {
+                doAndRestore(context => {
+                    context.lineWidth = 1;
+                    context.translate(xTranslate, yTranslate);
+
+                    drawSclera(context, x, y);
+                    drawIris(context, x, y);
+                    drawPupil(context, x, y);
+                    drawEyelid(context, x, y);
+                    drawEyebrow(context, x, y);
+                });                
+            };
+
+            const drawNose = (context, x, y, xTranslate = 0, yTranslate = 0) => {
+                doAndRestore(context => {
+                    context.translate(xTranslate, yTranslate);
+                    context.beginPath();
+                    context.arc(x, y, 4, 0, 2 * Math.PI, false);
+                    context.strokeStyle = "pink";
+                    context.stroke();
+
+                    context.beginPath();
+                    context.arc(x, y, 2, 0, 2 * Math.PI, false);
+                    /*
+                    context.moveTo(x - 2, y);
+                    context.lineTo(x - 3, y + 3);
+                    context.lineTo(x - 6, y + 6);
+
+                    context.lineTo(x + 6, y + 6);
+                    context.lineTo(x + 3, y + 3);
+                    context.lineTo(x + 2, y);
+
+                    context.lineTo(x - 2, y);
+                    */
+                    context.fillStyle = "brown";
+                    context.fill();
+                });
+            };
+
+            const drawMouth = (context, x, y, width) => {                
+                context.beginPath();
+                context.arc(x, y, width, 0, Math.PI, false);
+                context.strokeStyle = "pink";
+                context.stroke();
+            };
+
+            const drawHead = (x, y) => {
+                drawFace(context, x, y, CHARACTER_FACE_WIDTH_RADIUS, CHARACTER_FACE_HEIGHT_RADIUS);
+                drawHair(context, x, y, CHARACTER_FACE_WIDTH_RADIUS * 2, 10);
+                drawEye(context, x, y, -CHARACTER_EYE_WIDTH * .9, -CHARACTER_EYE_WIDTH * .9);
+                drawEye(context, x, y, CHARACTER_EYE_WIDTH * .9, -CHARACTER_EYE_WIDTH * .9);
+                drawNose(context, x, y, 0, 5);
+                drawMouth(context, x, y + CHARACTER_HEIGHT * .1, CHARACTER_WIDTH / 3);
+            };
+
+            const drawCharacter = () => {
+                const { x, y } = CHARACTER_POSITION;
+                drawHead(x, y);
+            };
+
+            const drawHeader = () => {
                 // Header
                 doAndRestore(context => {
                     context.fillStyle = HEADER_COLOR;
                     context.fillRect(0, 0, CANVAS_WIDTH, HEADER_HEIGHT);   
                 });
 
-                // Header buttons
+                // Header buttons, each drawButton will also call doAndRestore
                 for (const button of Object.values(BUTTON_PROPERTIES)) {
                     drawButton(context, button);
                 }
+            };
 
-                // Body background
+            const drawFooter = () => {                
                 doAndRestore(context => {
-                    context.fillStyle = "rgb(100, 100, 100)";
-                    context.fillRect(0, HEADER_HEIGHT, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
-                });
-
-                // Distinguished gentleman
-                doAndRestore(context => {
-                    context.fillStyle = "rgb(140, 20, 120)";
-                    // x, y, width, height
-                    const { x, y } = CHARACTER_POSITION;
-                    debugLog("Drawing character at x: " + x + ", y: " + y);
-                    context.fillRect(x, y, CHARACTER_WIDTH, CHARACTER_HEIGHT);
-                });
-                
-
-                // Footer
-                doAndRestore(context => {
-                    context.fillStyle = "rgb(11,133,0)";
+                    context.fillStyle = FOOTER_COLOR;
                     context.fillRect(0, CANVAS_HEIGHT - FOOTER_HEIGHT, CANVAS_WIDTH, FOOTER_HEIGHT);
                 });
+            }
+
+            const draw = () => {
+                context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+                drawBackground();
+                drawHeader();
+                drawCharacter();                
+                drawFooter();
 
                 if (GLOBAL_STATE.ELEMENT_HOVERED) {
                     setHoverCursor();
